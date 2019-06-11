@@ -1,6 +1,6 @@
+from types import MethodType
+
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import numpy as np
 
@@ -143,10 +143,14 @@ def train_one_shot(model, loss_fn, optimizer,
     """
     Implements one shot prunning described in the original paper.
     """
-    history = {}
+    history = {'train': None, 'after_prune': None}
     print('Preparing: Train before prune')
     history['train'] = train(model, loss_fn, optimizer,
                              prepare_epochs, train_loader, val_loader)
+
+    if prune_epochs <= 0 or prune_percent <= 0:
+        print('Prunning was not used due either prune_epochs<=0 or prune_percent<=0')
+        return history
 
     print('Pruning...')
     masks = weight_prune_mask(model, prune_percent)
@@ -176,7 +180,7 @@ def visualize(weights, title, figsize=None):
     mx = np.max(data)
 
     cmap = ListedColormap(['k', 'w', 'r'])
-    bounds=[0,0.000000000000001,mx/2,mx]
+    bounds=[0,0.000000000000001,mx/2,mx] #to emphasize zero weights
     norm = colors.BoundaryNorm(bounds, cmap.N)
 
     plt.figure(figsize=figsize)
@@ -187,44 +191,19 @@ def visualize(weights, title, figsize=None):
     plt.tight_layout()
 
 
-class MaskedLinear(nn.Linear):
-    def __init__(self, *args, **kwargs):
-        super(MaskedLinear, self).__init__(*args, **kwargs)
-        self.mask = None
+def create_maskable_module(module):
 
     def set_mask(self, mask):
-        self.mask = mask
-        mask_var = self.get_mask()
-        self.weight.data = self.weight.data * mask_var.data
+        self.mask = mask.clone().detach()
+        self.weight.data *= self.mask.data
 
-    def get_mask(self):
-        return to_var(self.mask, requires_grad=False)
+    def forward_hook(forward_method):
+        def forward(self, X):
+            if hasattr(self, 'mask'):
+                self.set_mask(self.mask)
+            return forward_method(X)
+        return forward
 
-    # def forward(self, x):
-    #     if self.mask:
-    #         mask_var = self.get_mask()
-    #         weight = self.weight * mask_var
-    #         return F.linear(x, weight, self.bias)
-    #     return F.linear(x, self.weight, self.bias)
-
-class MaskedConv2d(nn.Conv2d):
-    def __init__(self, *args, **kwargs):
-        super(MaskedConv2d, self).__init__(*args, **kwargs)
-        self.mask = None
-
-    def set_mask(self, mask):
-        self.mask = mask
-        mask_var = self.get_mask()
-        self.weight.data = self.weight.data * mask_var.data
-
-    def get_mask(self):
-        return to_var(self.mask, requires_grad=False)
-
-    # def forward(self, x):
-    #     if self.mask:
-    #         mask_var = self.get_mask()
-    #         weight = self.weight * mask_var
-    #         return F.conv2d(x, weight, self.bias, self.stride,
-    #                         self.padding, self.dilation, self.groups)
-    #     return F.conv2d(x, self.weight, self.bias, self.stride,
-    #                     self.padding, self.dilation, self.groups)
+    module.set_mask = MethodType(set_mask, module)
+    module.forward = MethodType(forward_hook(module.forward), module)
+    return module
