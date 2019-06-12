@@ -152,11 +152,12 @@ def train_one_shot(model, loss_fn, optimizer,
         print('Prunning was not used due either prune_epochs<=0 or prune_percent<=0')
         return history
 
-    print('Pruning...')
+    print('\nPruning...')
     masks = weight_prune_mask(model, prune_percent)
     model.reset_parameters()
     model.set_masks(masks)
     prune_rate(model)
+    print()
 
     print('Train after prune')
     history['after_prune'] = train(model, loss_fn, optimizer,
